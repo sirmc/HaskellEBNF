@@ -7,6 +7,8 @@ import qualified Data.ByteString as B
 import qualified Data.Map as Map 
 import Control.Monad.Random
 import Control.Monad
+import System.Directory
+import System.Exit
 
 type Grammar = Map.Map Identifier Production
 data Rule = Rule Identifier Production deriving Show
@@ -21,6 +23,40 @@ data Production = Follow Identifier
                 deriving Show
 
 skipSpaceNoNewline = skipWhile (\x -> isSpace x && not (x == '\n'))
+
+parseOverride :: Parser (Map.Map String [String])
+parseOverride = do
+    --skipSpace
+    g <- many1 parseOverrideRule
+    skipSpace
+    return $ Map.fromList $  g
+
+parseOverrideRule :: Parser (String, [String])
+parseOverrideRule = do
+    skipSpace
+    lhs <- identifier
+    skipSpace
+    char '='
+    skipSpace
+    rhs <- stringList
+    skipSpace
+    return $ (lhs, rhs)
+
+stringList :: Parser [String]
+stringList = do
+    skipSpace
+    t <- sepBy1 listTerm (skipSpace >> char ',' >> skipSpaceNoNewline)
+    skipSpace
+    return $ t
+
+listTerm :: Parser String
+listTerm = do
+    char '\"'
+    --c <- letter_ascii
+    --lhs <- many' $ satisfy (\c -> isAlphaNum c || c == '_') -- TODO: _
+    val <- manyTill' anyChar (char '\"')
+    return $ val
+    
 
 parseGrammar :: Parser Grammar
 parseGrammar = do
@@ -109,13 +145,25 @@ identifier = do
     return $ c:lhs
 
 ebnfFile :: FilePath
-ebnfFile = "calc2.txt"
+ebnfFile = "ap2.txt"
 
-depthThreshold = 50
+overrideFile :: FilePath
+overrideFile = "override.txt"
 
-generateTree :: Grammar -> Int -> Production -> IO String
+depthThreshold = 70
+
+{- Allows you to override value of Follow, e.g. to force use of certain identifier -}
+overrides = Map.fromList $ [("identifier", ["var2", "var1", "var3"])]
+
+findOverride s m = Map.lookup s m
+
+data GrammarInstance = GrammarInstance { grammar :: Grammar,
+                                         overrideMap :: Map.Map String [String]
+                                        }
+
+generateTree :: GrammarInstance -> Int -> Production -> IO String
 generateTree g c (Many t) = do
-                    r <- getStdRandom (randomR (0, 3))
+                    r <- getStdRandom (randomR (0, 4))
                     if c > depthThreshold then pure "" else fmap (concat) $ sequence $ replicate r (generateTree g (c + 1) t) -- pick randon number
 generateTree g c (Terminal t) = pure t 
 -- TODO: Force it to take a terminating path
@@ -124,18 +172,24 @@ generateTree g c (Expr t) = do
                     generateTree g (c + 1) $ t !! (r - 1)
 generateTree g c (Term t) = fmap (concat) $ sequence $ [generateTree g (c + 1) a | a <- t]
 generateTree g c (Follow s) = do 
-            let r = findRule s g
+            let r = findRule s (grammar g)
+            let o = findOverride s $ overrideMap g
             case r of
-                 Just t -> generateTree g (c + 1) t
-                 Nothing -> pure ("Error" ++ s)
+                 Just t -> 
+                    case o of
+                        Just ov -> do 
+                            n <- getStdRandom (randomR (1, length ov))
+                            pure $ ov !! (n - 1)
+                        Nothing -> generateTree g (c + 1) t
+                 Nothing -> pure ("Rule lookup error: " ++ s)
 generateTree g c (Grouped t) = generateTree g c t 
 generateTree g c (Optional t) = do
                     r <- getStdRandom random
                     if r then (generateTree g (c + 1) t) else (pure "")
 
-generateData :: Grammar ->  IO String
+generateData :: GrammarInstance ->  IO String
 generateData g = do
-            let s = findStart g
+            let s = findStart $ grammar g
             case s of 
                  Just t -> generateTree g 0 t
                  Nothing -> pure "error"
@@ -156,6 +210,7 @@ showTree (Term s) = concat $ map (\s -> showTree s ++ ",") s
 findRule :: String -> Grammar -> Maybe Production
 findRule s g = Map.lookup s g
 
+
 {- Starts at rule 'start' -}
 findStart g = findRule "start" g
 
@@ -168,11 +223,30 @@ main :: IO ()
 main = do
     file1 <- B.readFile ebnfFile
     let p = parseOnly (parseGrammar <* endOfInput) file1
-    case p of
-         Left err ->putStrLn $ "A parsing error was found: " ++ err
-         Right t -> do
-             g <- generateData t
-             --printGrammar t
-             putStrLn g
+    overrideFileExsist <- doesFileExist overrideFile
+    if overrideFileExsist
+    then 
+        case p of
+            Left err ->putStrLn $ "A parsing error was found: " ++ err
+            Right t -> do 
+                file2 <- B.readFile overrideFile
+                let ov = parseOnly (parseOverride <* endOfInput) file2
+                case ov of
+                    Left err -> do 
+                        putStrLn $ "A parsing error was found: " ++ err
+                        exitFailure
+                    Right ovi -> do
+                        g <- generateData $ GrammarInstance t $ ovi
+                        --printGrammar t
+                        putStrLn g
+    else 
+        case p of
+            Left err -> do 
+                putStrLn $ "A parsing error was found: " ++ err
+                exitFailure
+            Right t -> do
+                g <- generateData $ GrammarInstance t $ Map.empty
+                --printGrammar t
+                putStrLn g
 
 

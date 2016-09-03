@@ -24,7 +24,8 @@ executable ebnf
                        bytestring,
                        containers,
                        random,
-                       MonadRandom
+                       MonadRandom,
+                       directory
 
   -- hs-source-dirs:      
   default-language:    Haskell2010
