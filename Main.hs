@@ -1,13 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
-import Data.Attoparsec.Char8
-import qualified Data.Attoparsec.Char8 as A
+import Data.Attoparsec.ByteString.Char8
 import Data.Word
-import Data.Char (isAlphaNum, isAlpha)
+import Data.Char (isAlphaNum, isAlpha, ord)
 import Control.Applicative
 import qualified Data.ByteString as B
 import qualified Data.Map as Map 
+import Control.Monad.Random
+import Control.Monad
 
---type Grammar = [Rule]
 type Grammar = Map.Map Identifier Production
 data Rule = Rule Identifier Production deriving Show
 type Identifier = String
@@ -57,7 +57,9 @@ production =
 
 expression,term :: Parser Production
 expression = do
+    skipSpace
     t <- sepBy1 term (skipSpace >> char '|' >> skipSpaceNoNewline)
+    skipSpace
     return $ Expr t
 
 term = do
@@ -107,8 +109,36 @@ identifier = do
     return $ c:lhs
 
 ebnfFile :: FilePath
-ebnfFile = "input.txt"
+ebnfFile = "calc2.txt"
 
+depthThreshold = 50
+
+generateTree :: Grammar -> Int -> Production -> IO String
+generateTree g c (Many t) = do
+                    r <- getStdRandom (randomR (0, 3))
+                    if c > depthThreshold then pure "" else fmap (concat) $ sequence $ replicate r (generateTree g (c + 1) t) -- pick randon number
+generateTree g c (Terminal t) = pure t 
+-- TODO: Force it to take a terminating path
+generateTree g c (Expr t) = do 
+                    r <- getStdRandom (randomR (1, length t))
+                    generateTree g (c + 1) $ t !! (r - 1)
+generateTree g c (Term t) = fmap (concat) $ sequence $ [generateTree g (c + 1) a | a <- t]
+generateTree g c (Follow s) = do 
+            let r = findRule s g
+            case r of
+                 Just t -> generateTree g (c + 1) t
+                 Nothing -> pure ("Error" ++ s)
+generateTree g c (Grouped t) = generateTree g c t 
+generateTree g c (Optional t) = do
+                    r <- getStdRandom random
+                    if r then (generateTree g (c + 1) t) else (pure "")
+
+generateData :: Grammar ->  IO String
+generateData g = do
+            let s = findStart g
+            case s of 
+                 Just t -> generateTree g 0 t
+                 Nothing -> pure "error"
 
 -- PRINT FUNCTIONS
 
@@ -123,22 +153,26 @@ showTree (Term (x:[])) = showTree x
 showTree (Expr s) = concat $ map (\s -> showTree s ++ "|") s
 showTree (Term s) = concat $ map (\s -> showTree s ++ ",") s
 
---main = print $ parseOnly parseGrammar "abc = { 'def' | 'a' };\n"
---main = B.readFile ebnfFile >>= print . parseOnly parseGrammar
---findRule :: String -> Grammar -> Maybe Production
---findRule s g = Map.lookup s g
+findRule :: String -> Grammar -> Maybe Production
+findRule s g = Map.lookup s g
+
+{- Starts at rule 'start' -}
+findStart g = findRule "start" g
+
 printGrammar t = mapM_ (\v -> putStrLn $ v) 
             (Map.mapWithKey (\k v-> ((show k) ++ ": " ++  (showTree v))) t)
 
+
+
 main :: IO ()
---main = B.readFile ebnfFile >>= print . parseOnly (parseGrammar <* endOfInput)
 main = do
     file1 <- B.readFile ebnfFile
     let p = parseOnly (parseGrammar <* endOfInput) file1
     case p of
          Left err ->putStrLn $ "A parsing error was found: " ++ err
-         --Right t -> print $  findRule "identifier" t
-         --Right t -> mapM_ (\v -> putStrLn $ v) (Map.mapWithKey (\k v-> ((show k) ++ " " ++  (show v))) t)
-         Right t -> printGrammar t
+         Right t -> do
+             g <- generateData t
+             --printGrammar t
+             putStrLn g
 
 

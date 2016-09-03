@@ -1,0 +1,12 @@
+start = line , { line } ;
+line = expression , eol ;
+expression = term , { addop , " " , term , " " } ;
+term = factor , " " , { mulop , " " , factor , " " } ;
+factor = "( " , expression , ")" | number ;
+addop = "+" | "-" ;
+mulop = "*" ;
+number = [ "-" ] , digit , { digit } ;
+digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+letter = "A" | "B" | "C" | "a" | "b" | "c" ;
+eol = "
+" ;
